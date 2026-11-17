@@ -1,5 +1,7 @@
 """
 GitHub Actions version: fetch Chennai weather + air quality data,
+![Dashboard overview](Weather%20analysis%20Dashboard.png)
+
 then INSERT it into Supabase. API key and DB connection string are
 read from environment variables (set as GitHub Secrets).
 """

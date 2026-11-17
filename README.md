@@ -1,113 +1,59 @@
-"""
-GitHub Actions version: fetch Chennai weather + air quality data,
+# Chennai Weather & Air Quality Pipeline
+
+An automated data pipeline that collects weather and air quality readings for Chennai every day, stores them in a cloud PostgreSQL database, and shows the trends in an interactive Power BI dashboard.
+
+## Dashboard
+
 ![Dashboard overview](Weather%20analysis%20Dashboard.png)
 
-then INSERT it into Supabase. API key and DB connection string are
-read from environment variables (set as GitHub Secrets).
-"""
+## How it works
 
-import os
-import time
-import requests
-import psycopg2
-from datetime import datetime, timezone
+Open-Meteo and OpenWeatherMap APIs → Python script → Supabase (PostgreSQL) → Power BI dashboard
 
-OPENWEATHER_API_KEY = os.environ.get("OPENWEATHER_API_KEY")
-DB_CONNECTION_STRING = os.environ.get("DB_CONNECTION_STRING")
+A GitHub Actions workflow runs the Python script automatically every day at 02:00 UTC (7:30 AM IST), so the data keeps growing without any manual work.
 
-LATITUDE = 13.0827
-LONGITUDE = 80.2707
-CITY = "Chennai"
+## Tech stack
 
-now = datetime.now(timezone.utc)
-reading_date = now.date()
-reading_time = now
+| Layer | Tool |
+|---|---|
+| Weather data | Open-Meteo API |
+| Air quality data | OpenWeatherMap Air Pollution API |
+| Collection script | Python (requests, psycopg2) |
+| Database | Supabase (PostgreSQL) with Row Level Security enabled |
+| Automation | GitHub Actions (scheduled daily run) |
+| Visualisation | Power BI Desktop |
 
+## Data collected
 
-def get_with_retry(url, params, attempts=3, wait_seconds=20):
-    """Call an API, give up on each try after 30 seconds, and try up to 3 times."""
-    for attempt in range(1, attempts + 1):
-        try:
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.RequestException as error:
-            print(f"Attempt {attempt} of {attempts} failed: {type(error).__name__}")
-            if attempt == attempts:
-                raise
-            time.sleep(wait_seconds)
+- **Weather:** temperature (°C), humidity (%), wind speed (km/h), pressure (hPa), weather code
+- **Air quality:** AQI (1 = Good, 5 = Very Poor), PM2.5, PM10, NO2, SO2, CO, O3
 
+The data is stored in two tables, `weather_readings` and `air_quality_readings`. Each row has a `city` column, so more cities can be added later without changing the design.
 
-# PART 1: Fetch weather data
-weather_url = "https://api.open-meteo.com/v1/forecast"
-weather_params = {
-    "latitude": LATITUDE,
-    "longitude": LONGITUDE,
-    "current": "temperature_2m,relative_humidity_2m,wind_speed_10m,surface_pressure,weather_code",
-}
-weather_response = get_with_retry(weather_url, weather_params)
-weather_data = weather_response.json()["current"]
+## Dashboard features
 
-print("Weather data fetched:", weather_data)
+- Overview page: temperature and AQI trend charts, latest temperature card, AQI gauge, pollutant breakdown chart and a date-range slicer
+- Weather details page: humidity, PM2.5, wind speed and pressure trends
 
-# PART 2: Fetch air quality data
-aqi_url = "http://api.openweathermap.org/data/2.5/air_pollution"
-aqi_params = {
-    "lat": LATITUDE,
-    "lon": LONGITUDE,
-    "appid": OPENWEATHER_API_KEY,
-}
-aqi_response = get_with_retry(aqi_url, aqi_params)
-aqi_reading = aqi_response.json()["list"][0]
-aqi_value = aqi_reading["main"]["aqi"]
-components = aqi_reading["components"]
+## Security
 
-print("Air quality data fetched:", aqi_reading)
+API keys and the database connection string are stored as GitHub Secrets and read as environment variables, so no credentials appear in the code.
 
-# PART 3: Connect and insert
-conn = psycopg2.connect(DB_CONNECTION_STRING)
-cur = conn.cursor()
+## Challenges and fixes
 
-cur.execute(
-    """
-    INSERT INTO weather_readings
-        (city, reading_date, reading_time, temperature_c, humidity_pct, wind_speed_kmh, pressure_hpa, weather_code)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """,
-    (
-        CITY,
-        reading_date,
-        reading_time,
-        weather_data["temperature_2m"],
-        weather_data["relative_humidity_2m"],
-        weather_data["wind_speed_10m"],
-        weather_data["surface_pressure"],
-        weather_data["weather_code"],
-    ),
-)
+- **Network compatibility:** the direct Supabase connection failed on an IPv4-only network, so I switched to the Session pooler connection.
+- **Special characters in the database password:** the password had to be URL-encoded inside the connection string.
+- **API timeouts:** two scheduled runs failed when the weather API timed out. I diagnosed the cause from the GitHub Actions logs. Adding a request timeout and retries is a planned improvement.
 
-cur.execute(
-    """
-    INSERT INTO air_quality_readings
-        (city, reading_date, reading_time, aqi, pm2_5, pm10, no2, so2, co, o3)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """,
-    (
-        CITY,
-        reading_date,
-        reading_time,
-        aqi_value,
-        components["pm2_5"],
-        components["pm10"],
-        components["no2"],
-        components["so2"],
-        components["co"],
-        components["o3"],
-    ),
-)
+## Repository files
 
-conn.commit()
-cur.close()
-conn.close()
+- `collect_and_store_github.py` – fetches both readings and inserts them into the database
+- `requirements.txt` – Python dependencies
+- `.github/workflows/daily_run.yml` – the daily schedule
 
-print("\nSuccess! Both readings were inserted into Supabase.")
+## Possible next steps
+
+- Add a request timeout and retries
+- Schedule the dashboard refresh in the Power BI service
+- Add more cities
+- Add alerts when AQI reaches 4 or 5
